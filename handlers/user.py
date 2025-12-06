@@ -189,111 +189,161 @@ async def process_report_message(message: Message, state: FSMContext):
     
     await state.set_state(ReportStates.waiting_for_confirm)
 
-@router.callback_query(F.data == "confirm_report", ReportStates.waiting_for_confirm)
+@router.callback_query(F.data == "confirm_report")
 async def confirm_report_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Confirm and send report"""
-    data = await state.get_data()
-    report_type = data.get('report_type')
-    photo_file_id = data.get('photo_file_id')
-    report_text = data.get('report_text')
-    
-    # Save to database
-    report_id = save_report(
-        user_id=callback.from_user.id,
-        user_name=callback.from_user.full_name,
-        report_type=report_type,
-        report_text=report_text,
-        photo_file_id=photo_file_id
-    )
-    
-    # Send to user confirmation
-    confirmation_text = (
-        f"✅ Ваше обращение #{report_id} принято!\n\n"
-        f"📌 Тип: {report_type}\n"
-        f"📊 Статус: Ожидает обработки\n\n"
-    )
-    
-    if photo_file_id:
-        confirmation_text += "📷 Фото прикреплено\n\n"
-    
-    confirmation_text += "Мы свяжемся с вами в ближайшее время."
-    
-    # Update message (handle both photo and text messages)
-    if callback.message.photo:
-        await callback.message.edit_caption(
-            caption=confirmation_text,
-            reply_markup=None
-        )
-    else:
-        await callback.message.edit_text(
-            text=confirmation_text,
-            reply_markup=None
-        )
-    
-    await callback.answer("✅ Обращение отправлено!")
-    
-    # Get current time for the message
-    from datetime import datetime
-    current_time = datetime.now().strftime('%d.%m.%Y %H:%M')
-    
-    # Send to admin group with inline button
-    admin_message = (
-        f"🔔 НОВОЕ ОБРАЩЕНИЕ #{report_id}\n\n"
-        f"👤 От: {callback.from_user.full_name} (@{callback.from_user.username or 'без username'})\n"
-        f"🆔 User ID: {callback.from_user.id}\n"
-        f"📌 Тип: {report_type}\n"
-        f"📊 Статус: Pending\n\n"
-        f"💬 Сообщение:\n{report_text}\n\n"
-        f"⏰ Время: {current_time}"
-    )
-    
-    # Send to admin group with inline button
     import logging
     logger = logging.getLogger(__name__)
     
-    if not ADMIN_GROUP_ID:
-        logger.error("ADMIN_GROUP_ID is not set! Cannot send report to admin group.")
-        await callback.answer("⚠️ Ошибка: группа администраторов не настроена", show_alert=True)
-    else:
+    try:
+        logger.info(f"Confirm report callback received from user {callback.from_user.id}")
+        
+        data = await state.get_data()
+        logger.info(f"State data: {data}")
+        
+        report_type = data.get('report_type')
+        photo_file_id = data.get('photo_file_id')
+        report_text = data.get('report_text')
+        
+        if not report_text:
+            logger.error("report_text is missing in state data")
+            await callback.answer("❌ Ошибка: текст обращения не найден. Начните заново.", show_alert=True)
+            await state.clear()
+            await callback.message.answer(
+                "❌ Произошла ошибка. Пожалуйста, начните создание обращения заново.",
+                reply_markup=get_main_menu()
+            )
+            return
+        
+        if not report_type:
+            logger.error("report_type is missing in state data")
+            await callback.answer("❌ Ошибка: тип обращения не найден. Начните заново.", show_alert=True)
+            await state.clear()
+            await callback.message.answer(
+                "❌ Произошла ошибка. Пожалуйста, начните создание обращения заново.",
+                reply_markup=get_main_menu()
+            )
+            return
+        
+        # Save to database
+        logger.info(f"Saving report to database: type={report_type}, text_length={len(report_text)}")
+        report_id = save_report(
+            user_id=callback.from_user.id,
+            user_name=callback.from_user.full_name,
+            report_type=report_type,
+            report_text=report_text,
+            photo_file_id=photo_file_id
+        )
+        logger.info(f"Report saved with ID: {report_id}")
+    
+        # Send to user confirmation
+        confirmation_text = (
+            f"✅ Ваше обращение #{report_id} принято!\n\n"
+            f"📌 Тип: {report_type}\n"
+            f"📊 Статус: Ожидает обработки\n\n"
+        )
+        
+        if photo_file_id:
+            confirmation_text += "📷 Фото прикреплено\n\n"
+        
+        confirmation_text += "Мы свяжемся с вами в ближайшее время."
+        
+        # Update message (handle both photo and text messages)
         try:
-            logger.info(f"Sending report #{report_id} to admin group {ADMIN_GROUP_ID}")
-            
-            if photo_file_id:
-                # Send message with photo and inline button
-                sent_message = await bot.send_photo(
-                    chat_id=ADMIN_GROUP_ID,
-                    photo=photo_file_id,
-                    caption=admin_message,
-                    reply_markup=get_admin_take_report_keyboard(report_id)
+            if callback.message.photo:
+                await callback.message.edit_caption(
+                    caption=confirmation_text,
+                    reply_markup=None
                 )
-                logger.info(f"Report #{report_id} sent to admin group successfully (with photo), message_id: {sent_message.message_id}")
             else:
-                # Send text message with inline button
-                sent_message = await bot.send_message(
-                    chat_id=ADMIN_GROUP_ID,
-                    text=admin_message,
-                    reply_markup=get_admin_take_report_keyboard(report_id)
+                await callback.message.edit_text(
+                    text=confirmation_text,
+                    reply_markup=None
                 )
-                logger.info(f"Report #{report_id} sent to admin group successfully (text only), message_id: {sent_message.message_id}")
         except Exception as e:
-            # Log error but don't fail the user flow
-            logger.error(f"Failed to send message to admin group {ADMIN_GROUP_ID}: {e}", exc_info=True)
-            # Still send confirmation to user, but notify about error
+            logger.error(f"Failed to edit message: {e}")
+            # If edit fails, send new message
+            await callback.message.answer(confirmation_text)
+        
+        await callback.answer("✅ Обращение отправлено!")
+    
+        # Get current time for the message
+        from datetime import datetime
+        current_time = datetime.now().strftime('%d.%m.%Y %H:%M')
+        
+        # Send to admin group with inline button
+        admin_message = (
+            f"🔔 НОВОЕ ОБРАЩЕНИЕ #{report_id}\n\n"
+            f"👤 От: {callback.from_user.full_name} (@{callback.from_user.username or 'без username'})\n"
+            f"🆔 User ID: {callback.from_user.id}\n"
+            f"📌 Тип: {report_type}\n"
+            f"📊 Статус: Pending\n\n"
+            f"💬 Сообщение:\n{report_text}\n\n"
+            f"⏰ Время: {current_time}"
+        )
+        
+        # Send to admin group with inline button
+        if not ADMIN_GROUP_ID:
+            logger.error("ADMIN_GROUP_ID is not set! Cannot send report to admin group.")
             await bot.send_message(
                 chat_id=callback.from_user.id,
-                text=f"⚠️ Обращение #{report_id} сохранено, но не удалось отправить в группу администраторов. Обратитесь к администратору."
+                text=f"⚠️ Обращение #{report_id} сохранено, но группа администраторов не настроена. Обратитесь к администратору."
             )
-    
-    await state.clear()
-    
-    # Send main menu to user
-    await bot.send_message(
-        chat_id=callback.from_user.id,
-        text="Выберите действие:",
-        reply_markup=get_main_menu()
-    )
+        else:
+            try:
+                logger.info(f"Sending report #{report_id} to admin group {ADMIN_GROUP_ID}")
+                
+                if photo_file_id:
+                    # Send message with photo and inline button
+                    sent_message = await bot.send_photo(
+                        chat_id=ADMIN_GROUP_ID,
+                        photo=photo_file_id,
+                        caption=admin_message,
+                        reply_markup=get_admin_take_report_keyboard(report_id)
+                    )
+                    logger.info(f"Report #{report_id} sent to admin group successfully (with photo), message_id: {sent_message.message_id}")
+                else:
+                    # Send text message with inline button
+                    sent_message = await bot.send_message(
+                        chat_id=ADMIN_GROUP_ID,
+                        text=admin_message,
+                        reply_markup=get_admin_take_report_keyboard(report_id)
+                    )
+                    logger.info(f"Report #{report_id} sent to admin group successfully (text only), message_id: {sent_message.message_id}")
+            except Exception as e:
+                # Log error but don't fail the user flow
+                logger.error(f"Failed to send message to admin group {ADMIN_GROUP_ID}: {e}", exc_info=True)
+                # Still send confirmation to user, but notify about error
+                await bot.send_message(
+                    chat_id=callback.from_user.id,
+                    text=f"⚠️ Обращение #{report_id} сохранено, но не удалось отправить в группу администраторов. Обратитесь к администратору."
+                )
+        
+        await state.clear()
+        
+        # Send main menu to user
+        try:
+            await bot.send_message(
+                chat_id=callback.from_user.id,
+                text="Выберите действие:",
+                reply_markup=get_main_menu()
+            )
+        except Exception as e:
+            logger.error(f"Failed to send main menu: {e}")
+            
+    except Exception as e:
+        logger.error(f"Error in confirm_report_callback: {e}", exc_info=True)
+        await callback.answer("❌ Произошла ошибка при отправке обращения", show_alert=True)
+        await state.clear()
+        try:
+            await callback.message.answer(
+                "❌ Произошла ошибка. Пожалуйста, попробуйте создать обращение заново.",
+                reply_markup=get_main_menu()
+            )
+        except:
+            pass
 
-@router.callback_query(F.data == "cancel_report", ReportStates.waiting_for_confirm)
+@router.callback_query(F.data == "cancel_report")
 async def cancel_report_callback(callback: CallbackQuery, state: FSMContext):
     """Cancel report sending"""
     await state.clear()
