@@ -7,6 +7,12 @@ load_dotenv()
 # Bot Configuration
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = os.getenv("ADMIN_GROUP_ID")
+# Convert to int if it's a string (Telegram group IDs are negative integers)
+if ADMIN_GROUP_ID:
+    try:
+        ADMIN_GROUP_ID = int(ADMIN_GROUP_ID)
+    except ValueError:
+        pass  # Keep as string if conversion fails
 MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "0"))
 
 # PostgreSQL Database Configuration
