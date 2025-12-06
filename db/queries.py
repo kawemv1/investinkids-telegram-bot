@@ -22,7 +22,6 @@ def init_db():
                     -- Report details
                     report_type TEXT NOT NULL,
                     report_text TEXT NOT NULL,
-                    photo_file_id TEXT,
                     
                     -- Status tracking
                     status TEXT DEFAULT 'pending',
@@ -41,19 +40,6 @@ def init_db():
                 )
             ''')
             
-            # Add photo_file_id column if it doesn't exist (for existing databases)
-            cursor.execute('''
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name='reports' AND column_name='photo_file_id'
-                    ) THEN
-                        ALTER TABLE reports ADD COLUMN photo_file_id TEXT;
-                    END IF;
-                END $$;
-            ''')
-            
             # Indexes for faster queries
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON reports(user_id);
@@ -67,15 +53,15 @@ def init_db():
             
             conn.commit()
 
-def save_report(user_id: int, user_name: str, report_type: str, report_text: str, photo_file_id: str = None) -> int:
+def save_report(user_id: int, user_name: str, report_type: str, report_text: str) -> int:
     """Save new report"""
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''
-                INSERT INTO reports (user_id, user_name, report_type, report_text, photo_file_id)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO reports (user_id, user_name, report_type, report_text)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id
-            ''', (user_id, user_name, report_type, report_text, photo_file_id))
+            ''', (user_id, user_name, report_type, report_text))
             report_id = cursor.fetchone()[0]
             conn.commit()
             return report_id
