@@ -154,40 +154,76 @@ async def cancel_report(message: Message, state: FSMContext):
 @router.message(ReportStates.waiting_for_message)
 async def process_report_message(message: Message, state: FSMContext):
     """Process user's report message and show preview"""
-    data = await state.get_data()
-    report_type = data.get('report_type')
-    photo_file_id = data.get('photo_file_id')
+    import logging
+    logger = logging.getLogger(__name__)
     
-    # Save message text to state
-    await state.update_data(report_text=message.text)
-    
-    # Show preview
-    preview_text = (
-        f"📋 Предпросмотр обращения:\n\n"
-        f"📌 Тип: {report_type}\n"
-    )
-    
-    if photo_file_id:
-        preview_text += "📷 Фото: прикреплено\n"
-    
-    preview_text += (
-        f"💬 Сообщение:\n{message.text}\n\n"
-        f"Проверьте информацию и нажмите 'Отправить жалобу' для отправки."
-    )
-    
-    if photo_file_id:
-        await message.answer_photo(
-            photo=photo_file_id,
-            caption=preview_text,
-            reply_markup=get_confirm_report_keyboard()
+    try:
+        logger.info(f"Processing report message from user {message.from_user.id}")
+        
+        # Check if message has text
+        if not message.text:
+            await message.answer(
+                "❌ Пожалуйста, отправьте текстовое сообщение с описанием проблемы.",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
+        
+        data = await state.get_data()
+        logger.info(f"State data: {data}")
+        
+        report_type = data.get('report_type')
+        photo_file_id = data.get('photo_file_id')
+        
+        if not report_type:
+            logger.error("report_type is missing in state")
+            await message.answer(
+                "❌ Ошибка: тип обращения не найден. Пожалуйста, начните заново.",
+                reply_markup=get_main_menu()
+            )
+            await state.clear()
+            return
+        
+        # Save message text to state
+        await state.update_data(report_text=message.text)
+        logger.info(f"Report text saved: {len(message.text)} characters")
+        
+        # Show preview
+        preview_text = (
+            f"📋 Предпросмотр обращения:\n\n"
+            f"📌 Тип: {report_type}\n"
         )
-    else:
+        
+        if photo_file_id:
+            preview_text += "📷 Фото: прикреплено\n"
+        
+        preview_text += (
+            f"💬 Сообщение:\n{message.text}\n\n"
+            f"Проверьте информацию и нажмите 'Отправить жалобу' для отправки."
+        )
+        
+        if photo_file_id:
+            await message.answer_photo(
+                photo=photo_file_id,
+                caption=preview_text,
+                reply_markup=get_confirm_report_keyboard()
+            )
+            logger.info("Preview sent with photo")
+        else:
+            await message.answer(
+                preview_text,
+                reply_markup=get_confirm_report_keyboard()
+            )
+            logger.info("Preview sent without photo")
+        
+        await state.set_state(ReportStates.waiting_for_confirm)
+        logger.info("State changed to waiting_for_confirm")
+        
+    except Exception as e:
+        logger.error(f"Error in process_report_message: {e}", exc_info=True)
         await message.answer(
-            preview_text,
-            reply_markup=get_confirm_report_keyboard()
+            "❌ Произошла ошибка при обработке сообщения. Пожалуйста, попробуйте еще раз.",
+            reply_markup=get_cancel_keyboard()
         )
-    
-    await state.set_state(ReportStates.waiting_for_confirm)
 
 @router.callback_query(F.data == "confirm_report")
 async def confirm_report_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -419,9 +455,32 @@ async def my_reports(message: Message):
 @router.message(F.text & ~F.text.startswith("/") & (F.chat.type == "private"))
 async def fallback_handler(message: Message, state: FSMContext):
     """Fallback handler for unknown messages (only for non-command text messages in private chat)"""
+    from aiogram.fsm.state import State
+    
     current_state = await state.get_state()
     
-    # Если пользователь в процессе создания обращения
+    # Если пользователь в состоянии создания обращения, не обрабатываем здесь
+    # Проверяем, является ли состояние частью ReportStates
+    if current_state:
+        state_str = str(current_state)
+        # Проверяем, не является ли это состояние из ReportStates
+        report_states = [
+            "ReportStates:waiting_for_report_type",
+            "ReportStates:waiting_for_photo_choice", 
+            "ReportStates:waiting_for_photo",
+            "ReportStates:waiting_for_message",
+            "ReportStates:waiting_for_confirm"
+        ]
+        
+        # Если состояние из ReportStates, не обрабатываем здесь
+        # (эти состояния обрабатываются специальными обработчиками)
+        if any(rs in state_str for rs in report_states):
+            # Состояния ReportStates обрабатываются отдельными обработчиками
+            # Если мы здесь, значит обработчик состояния не сработал
+            # Но не будем мешать - просто вернем управление
+            return
+    
+    # Если пользователь в каком-то другом состоянии
     if current_state:
         await message.answer(
             "❌ Пожалуйста, следуйте инструкциям выше или нажмите '❌ Отменить' для возврата в главное меню.",
