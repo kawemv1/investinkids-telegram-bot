@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 from aiogram import Bot
 from db.queries import get_old_pending_reports
+from keyboards.inline_kb import get_admin_action_keyboard
 from config import ADMIN_GROUP_ID
 
 # Store IDs of reports that already got reminders
@@ -32,21 +33,14 @@ async def check_pending_reports(bot: Bot):
                     f"👤 От: {report['user_name']}\n"
                     f"📌 Тип: {report['report_type']}\n"
                     f"💬 Сообщение:\n{report['report_text'][:150]}...\n\n"
-                    f"❗ Пожалуйста, возьмите обращение в работу!\n"
-                    f"Используйте команду: /take_{report['id']}"
+                    f"❗ Пожалуйста, возьмите обращение в работу!"
                 )
                 
-                if report.get('photo_file_id'):
-                    await bot.send_photo(
-                        chat_id=ADMIN_GROUP_ID,
-                        photo=report['photo_file_id'],
-                        caption=reminder_message
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id=ADMIN_GROUP_ID,
-                        text=reminder_message
-                    )
+                await bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text=reminder_message,
+                    reply_markup=get_admin_action_keyboard(report['id'])
+                )
                 
                 # Mark as reminded
                 reminded_reports.add(report['id'])
@@ -63,12 +57,6 @@ async def check_pending_reports(bot: Bot):
         
         # Check every 30 minutes
         await asyncio.sleep(1800)
-
-async def start_scheduler(bot: Bot):
-    """Start the background scheduler"""
-    asyncio.create_task(check_pending_reports(bot))
-    print("✅ Reminder scheduler started - checking every 30 minutes")
-
 
 async def start_scheduler(bot: Bot):
     """Start the background scheduler"""
