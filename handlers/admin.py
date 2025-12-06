@@ -1,9 +1,10 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from db.queries import take_report, complete_report, get_report, get_reports_by_status
+from keyboards.inline_kb import get_admin_take_report_keyboard
 
 router = Router()
 
@@ -74,6 +75,87 @@ async def take_request(message: Message, state: FSMContext):
         
     except (IndexError, ValueError):
         await message.answer("❌ Используйте: /take_[ID]")
+
+@router.callback_query(F.data.startswith("take_"))
+async def take_report_callback(callback: CallbackQuery, bot: Bot):
+    """Handle take report button click"""
+    try:
+        report_id = int(callback.data.split("_")[1])
+        
+        # Get report details
+        report = get_report(report_id)
+        
+        if not report:
+            await callback.answer("❌ Обращение не найдено", show_alert=True)
+            return
+        
+        if report['status'] != 'pending':
+            await callback.answer(
+                f"⚠️ Обращение уже взято в работу: {report['responsible_user_name']}",
+                show_alert=True
+            )
+            return
+        
+        # Assign admin to report
+        take_report(
+            report_id=report_id,
+            worker_id=callback.from_user.id,
+            worker_name=callback.from_user.full_name
+        )
+        
+        # Send to admin in PM
+        admin_text = (
+            f"✅ Вы взяли обращение #{report_id} в работу\n\n"
+            f"👤 От: {report['user_name']}\n"
+            f"🆔 User ID: {report['user_id']}\n"
+            f"📌 Тип: {report['report_type']}\n"
+            f"💬 Сообщение:\n{report['report_text']}\n\n"
+        )
+        
+        if report.get('photo_file_id'):
+            admin_text += "📷 Фото прикреплено\n\n"
+        
+        admin_text += (
+            f"📊 Статус: В работе\n"
+            f"⏰ Создано: {report['created_at'].strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"Когда выполните работу, отправьте ответ:\n"
+            f"/complete_{report_id} [ваш ответ]\n\n"
+            f"Пример:\n"
+            f"/complete_{report_id} Проблема решена, заменили оборудование"
+        )
+        
+        if report.get('photo_file_id'):
+            await bot.send_photo(
+                chat_id=callback.from_user.id,
+                photo=report['photo_file_id'],
+                caption=admin_text
+            )
+        else:
+            await bot.send_message(
+                chat_id=callback.from_user.id,
+                text=admin_text
+            )
+        
+        # Update message in group - remove button and show who took it
+        if callback.message.photo:
+            # If message has photo, update caption
+            current_caption = callback.message.caption or ""
+            await callback.message.edit_caption(
+                caption=current_caption + f"\n\n✅ Взято в работу: {callback.from_user.full_name}",
+                reply_markup=None
+            )
+        else:
+            # If text message, update text
+            current_text = callback.message.text or ""
+            await callback.message.edit_text(
+                text=current_text + f"\n\n✅ Взято в работу: {callback.from_user.full_name}",
+                reply_markup=None
+            )
+        
+        await callback.answer("✅ Обращение назначено вам", show_alert=True)
+        
+    except (IndexError, ValueError) as e:
+        await callback.answer("❌ Ошибка обработки", show_alert=True)
 
 @router.message(F.text.startswith("/complete_"))
 async def complete_command(message: Message, state: FSMContext):

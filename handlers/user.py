@@ -1,5 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message, PhotoSize
+from aiogram.types import Message, PhotoSize, CallbackQuery
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -9,6 +9,7 @@ from keyboards.reply_kb import (
     get_cancel_keyboard,
     get_photo_choice_keyboard
 )
+from keyboards.inline_kb import get_confirm_report_keyboard, get_admin_take_report_keyboard
 from db.queries import save_report, get_report, get_user_reports
 from config import ADMIN_GROUP_ID
 
@@ -20,6 +21,7 @@ class ReportStates(StatesGroup):
     waiting_for_photo_choice = State()
     waiting_for_photo = State()
     waiting_for_message = State()
+    waiting_for_confirm = State()  # New state for confirmation
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
@@ -150,18 +152,57 @@ async def cancel_report(message: Message, state: FSMContext):
     )
 
 @router.message(ReportStates.waiting_for_message)
-async def process_report_message(message: Message, state: FSMContext, bot: Bot):
-    """Process user's report message"""
+async def process_report_message(message: Message, state: FSMContext):
+    """Process user's report message and show preview"""
     data = await state.get_data()
     report_type = data.get('report_type')
     photo_file_id = data.get('photo_file_id')
     
+    # Save message text to state
+    await state.update_data(report_text=message.text)
+    
+    # Show preview
+    preview_text = (
+        f"📋 Предпросмотр обращения:\n\n"
+        f"📌 Тип: {report_type}\n"
+    )
+    
+    if photo_file_id:
+        preview_text += "📷 Фото: прикреплено\n"
+    
+    preview_text += (
+        f"💬 Сообщение:\n{message.text}\n\n"
+        f"Проверьте информацию и нажмите 'Отправить жалобу' для отправки."
+    )
+    
+    if photo_file_id:
+        await message.answer_photo(
+            photo=photo_file_id,
+            caption=preview_text,
+            reply_markup=get_confirm_report_keyboard()
+        )
+    else:
+        await message.answer(
+            preview_text,
+            reply_markup=get_confirm_report_keyboard()
+        )
+    
+    await state.set_state(ReportStates.waiting_for_confirm)
+
+@router.callback_query(F.data == "confirm_report", ReportStates.waiting_for_confirm)
+async def confirm_report_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Confirm and send report"""
+    data = await state.get_data()
+    report_type = data.get('report_type')
+    photo_file_id = data.get('photo_file_id')
+    report_text = data.get('report_text')
+    
     # Save to database
     report_id = save_report(
-        user_id=message.from_user.id,
-        user_name=message.from_user.full_name,
+        user_id=callback.from_user.id,
+        user_name=callback.from_user.full_name,
         report_type=report_type,
-        report_text=message.text,
+        report_text=report_text,
         photo_file_id=photo_file_id
     )
     
@@ -177,38 +218,80 @@ async def process_report_message(message: Message, state: FSMContext, bot: Bot):
     
     confirmation_text += "Мы свяжемся с вами в ближайшее время."
     
-    await message.answer(
-        confirmation_text,
-        reply_markup=get_main_menu()
-    )
+    # Update message (handle both photo and text messages)
+    if callback.message.photo:
+        await callback.message.edit_caption(
+            caption=confirmation_text,
+            reply_markup=None
+        )
+    else:
+        await callback.message.edit_text(
+            text=confirmation_text,
+            reply_markup=None
+        )
     
-    # Send to admin group
+    await callback.answer("✅ Обращение отправлено!")
+    
+    # Send to admin group with inline button
     admin_message = (
         f"🔔 НОВОЕ ОБРАЩЕНИЕ #{report_id}\n\n"
-        f"👤 От: {message.from_user.full_name} (@{message.from_user.username or 'без username'})\n"
-        f"🆔 User ID: {message.from_user.id}\n"
+        f"👤 От: {callback.from_user.full_name} (@{callback.from_user.username or 'без username'})\n"
+        f"🆔 User ID: {callback.from_user.id}\n"
         f"📌 Тип: {report_type}\n"
-        f"📊 Статус: Pending\n\n"
-        f"💬 Сообщение:\n{message.text}\n\n"
-        f"⏰ Время: {message.date.strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"Взять в работу: /take_{report_id}"
+        f"📊 Статус: Ожидает обработки\n\n"
+        f"💬 Сообщение:\n{report_text}\n\n"
+        f"⏰ Время: {callback.message.date.strftime('%d.%m.%Y %H:%M')}"
     )
     
     if photo_file_id:
-        # Send message with photo
+        # Send message with photo and inline button
         await bot.send_photo(
             chat_id=ADMIN_GROUP_ID,
             photo=photo_file_id,
-            caption=admin_message
+            caption=admin_message,
+            reply_markup=get_admin_take_report_keyboard(report_id)
         )
     else:
-        # Send text message
+        # Send text message with inline button
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
-            text=admin_message
+            text=admin_message,
+            reply_markup=get_admin_take_report_keyboard(report_id)
         )
     
     await state.clear()
+    
+    # Send main menu to user
+    await bot.send_message(
+        chat_id=callback.from_user.id,
+        text="Выберите действие:",
+        reply_markup=get_main_menu()
+    )
+
+@router.callback_query(F.data == "cancel_report", ReportStates.waiting_for_confirm)
+async def cancel_report_callback(callback: CallbackQuery, state: FSMContext):
+    """Cancel report sending"""
+    await state.clear()
+    
+    # Update message (handle both photo and text messages)
+    if callback.message.photo:
+        await callback.message.edit_caption(
+            caption="❌ Отправка обращения отменена.",
+            reply_markup=None
+        )
+    else:
+        await callback.message.edit_text(
+            text="❌ Отправка обращения отменена.",
+            reply_markup=None
+        )
+    
+    await callback.answer("❌ Отправка отменена")
+    
+    # Send main menu
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=get_main_menu()
+    )
 
 @router.message(F.text == "📋 Мои обращения")
 async def my_reports(message: Message):
@@ -258,9 +341,9 @@ async def my_reports(message: Message):
         reply_markup=get_main_menu()
     )
 
-@router.message(F.text & ~F.text.startswith("/"))
+@router.message(F.text & ~F.text.startswith("/") & (F.chat.type == "private"))
 async def fallback_handler(message: Message, state: FSMContext):
-    """Fallback handler for unknown messages (only for non-command text messages)"""
+    """Fallback handler for unknown messages (only for non-command text messages in private chat)"""
     current_state = await state.get_state()
     
     # Если пользователь в процессе создания обращения
