@@ -258,9 +258,9 @@ async def my_reports(message: Message):
         reply_markup=get_main_menu()
     )
 
-@router.message()
+@router.message(F.text & ~F.text.startswith("/"))
 async def fallback_handler(message: Message, state: FSMContext):
-    """Fallback handler for unknown messages"""
+    """Fallback handler for unknown messages (only for non-command text messages)"""
     current_state = await state.get_state()
     
     # Если пользователь в процессе создания обращения

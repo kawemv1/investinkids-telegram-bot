@@ -68,9 +68,9 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     
-    # Register routers
-    dp.include_router(user.router)
+    # Register routers (admin first to handle admin commands before user fallback)
     dp.include_router(admin.router)
+    dp.include_router(user.router)
     logger.info("Routers registered")
     
     # Start scheduler for reminders
