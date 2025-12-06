@@ -1,13 +1,13 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, PhotoSize
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from keyboards.inline_kb import (
+from keyboards.reply_kb import (
     get_main_menu, 
     get_request_type_keyboard,
     get_cancel_keyboard,
-    get_admin_action_keyboard
+    get_photo_choice_keyboard
 )
 from db.queries import save_report, get_report, get_user_reports
 from config import ADMIN_GROUP_ID
@@ -17,6 +17,8 @@ router = Router()
 # States for user report flow
 class ReportStates(StatesGroup):
     waiting_for_report_type = State()
+    waiting_for_photo_choice = State()
+    waiting_for_photo = State()
     waiting_for_message = State()
 
 @router.message(Command("start"))
@@ -33,98 +35,150 @@ async def cmd_start(message: Message):
         reply_markup=get_main_menu()
     )
 
-@router.callback_query(F.data == "back_main")
-async def back_to_main(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text == "🔙 Назад")
+async def back_to_main(message: Message, state: FSMContext):
     """Return to main menu"""
     await state.clear()
-    await callback.message.edit_text(
+    await message.answer(
         "Выберите действие:",
         reply_markup=get_main_menu()
     )
-    await callback.answer()
 
-@router.callback_query(F.data == "report_problem")
-async def report_problem(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text == "🔧 Сообщить о проблеме")
+async def report_problem(message: Message, state: FSMContext):
     """Handle problem report"""
     await state.update_data(report_category="problem")
-    await callback.message.edit_text(
+    await message.answer(
         "🔧 Выберите тип проблемы:",
         reply_markup=get_request_type_keyboard()
     )
-    await callback.answer()
 
-@router.callback_query(F.data == "suggestion")
-async def suggestion(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text == "💡 Оставить предложение")
+async def suggestion(message: Message, state: FSMContext):
     """Handle suggestion"""
     await state.update_data(report_category="suggestion", report_type="Предложение")
-    await callback.message.edit_text(
-        "💡 Напишите ваше предложение:",
-        reply_markup=get_cancel_keyboard()
+    await message.answer(
+        "💡 Хотите добавить фото к предложению?",
+        reply_markup=get_photo_choice_keyboard()
     )
-    await state.set_state(ReportStates.waiting_for_message)
-    await callback.answer()
+    await state.set_state(ReportStates.waiting_for_photo_choice)
 
-@router.callback_query(F.data == "feedback")
-async def feedback(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text == "💬 Обратная связь")
+async def feedback(message: Message, state: FSMContext):
     """Handle feedback"""
     await state.update_data(report_category="feedback", report_type="Обратная связь")
-    await callback.message.edit_text(
-        "💬 Напишите вашу обратную связь:",
-        reply_markup=get_cancel_keyboard()
+    await message.answer(
+        "💬 Хотите добавить фото к обратной связи?",
+        reply_markup=get_photo_choice_keyboard()
     )
-    await state.set_state(ReportStates.waiting_for_message)
-    await callback.answer()
+    await state.set_state(ReportStates.waiting_for_photo_choice)
 
-@router.callback_query(F.data.startswith("type_"))
-async def select_report_type(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text.in_(["🏫 Помещение/оборудование", "📚 Учебный процесс", "👥 Персонал"]))
+async def select_report_type(message: Message, state: FSMContext):
     """Handle report type selection"""
     type_map = {
-        "type_facility": "Помещение/оборудование",
-        "type_education": "Учебный процесс",
-        "type_staff": "Персонал"
+        "🏫 Помещение/оборудование": "Помещение/оборудование",
+        "📚 Учебный процесс": "Учебный процесс",
+        "👥 Персонал": "Персонал"
     }
     
-    report_type = type_map.get(callback.data)
+    report_type = type_map.get(message.text)
     await state.update_data(report_type=report_type)
     
-    await callback.message.edit_text(
+    await message.answer(
         f"📝 Выбрано: {report_type}\n\n"
-        "Опишите проблему подробно:",
+        "Хотите добавить фото к жалобе?",
+        reply_markup=get_photo_choice_keyboard()
+    )
+    await state.set_state(ReportStates.waiting_for_photo_choice)
+
+@router.message(ReportStates.waiting_for_photo_choice, F.text == "📷 Добавить фото")
+async def request_photo(message: Message, state: FSMContext):
+    """Request photo from user"""
+    await message.answer(
+        "📷 Пожалуйста, отправьте фото:",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(ReportStates.waiting_for_photo)
+
+@router.message(ReportStates.waiting_for_photo_choice, F.text == "➡️ Продолжить без фото")
+async def skip_photo(message: Message, state: FSMContext):
+    """Skip photo and request message"""
+    data = await state.get_data()
+    report_type = data.get('report_type', 'Обращение')
+    
+    await message.answer(
+        f"📝 Теперь опишите проблему подробно:",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(ReportStates.waiting_for_message)
-    await callback.answer()
 
-@router.callback_query(F.data == "cancel")
-async def cancel_report(callback: CallbackQuery, state: FSMContext):
+@router.message(ReportStates.waiting_for_photo, F.photo)
+async def process_photo(message: Message, state: FSMContext):
+    """Process photo from user"""
+    # Get the largest photo
+    photo: PhotoSize = message.photo[-1]
+    photo_file_id = photo.file_id
+    
+    await state.update_data(photo_file_id=photo_file_id)
+    
+    data = await state.get_data()
+    report_type = data.get('report_type', 'Обращение')
+    
+    await message.answer(
+        f"✅ Фото получено!\n\n"
+        f"📝 Теперь опишите проблему подробно:",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(ReportStates.waiting_for_message)
+
+@router.message(ReportStates.waiting_for_photo)
+async def invalid_photo(message: Message):
+    """Handle invalid photo input"""
+    await message.answer(
+        "❌ Пожалуйста, отправьте фото или нажмите 'Отменить'",
+        reply_markup=get_cancel_keyboard()
+    )
+
+@router.message(F.text == "❌ Отменить")
+async def cancel_report(message: Message, state: FSMContext):
     """Cancel current operation"""
     await state.clear()
-    await callback.message.edit_text(
+    await message.answer(
         "❌ Операция отменена.\n\nВыберите действие:",
         reply_markup=get_main_menu()
     )
-    await callback.answer()
 
 @router.message(ReportStates.waiting_for_message)
 async def process_report_message(message: Message, state: FSMContext, bot: Bot):
     """Process user's report message"""
     data = await state.get_data()
     report_type = data.get('report_type')
+    photo_file_id = data.get('photo_file_id')
     
     # Save to database
     report_id = save_report(
         user_id=message.from_user.id,
         user_name=message.from_user.full_name,
         report_type=report_type,
-        report_text=message.text
+        report_text=message.text,
+        photo_file_id=photo_file_id
     )
     
     # Send to user confirmation
-    await message.answer(
+    confirmation_text = (
         f"✅ Ваше обращение #{report_id} принято!\n\n"
         f"📌 Тип: {report_type}\n"
         f"📊 Статус: Ожидает обработки\n\n"
-        "Мы свяжемся с вами в ближайшее время.",
+    )
+    
+    if photo_file_id:
+        confirmation_text += "📷 Фото прикреплено\n\n"
+    
+    confirmation_text += "Мы свяжемся с вами в ближайшее время."
+    
+    await message.answer(
+        confirmation_text,
         reply_markup=get_main_menu()
     )
     
@@ -136,25 +190,37 @@ async def process_report_message(message: Message, state: FSMContext, bot: Bot):
         f"📌 Тип: {report_type}\n"
         f"📊 Статус: Pending\n\n"
         f"💬 Сообщение:\n{message.text}\n\n"
-        f"⏰ Время: {message.date.strftime('%d.%m.%Y %H:%M')}"
+        f"⏰ Время: {message.date.strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"Взять в работу: /take_{report_id}"
     )
     
-    await bot.send_message(
-        chat_id=ADMIN_GROUP_ID,
-        text=admin_message,
-        reply_markup=get_admin_action_keyboard(report_id)
-    )
+    if photo_file_id:
+        # Send message with photo
+        await bot.send_photo(
+            chat_id=ADMIN_GROUP_ID,
+            photo=photo_file_id,
+            caption=admin_message
+        )
+    else:
+        # Send text message
+        await bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=admin_message
+        )
     
     await state.clear()
 
-@router.callback_query(F.data == "my_requests")
-async def my_reports(callback: CallbackQuery):
+@router.message(F.text == "📋 Мои обращения")
+async def my_reports(message: Message):
     """Show user's reports"""
-    user_id = callback.from_user.id
+    user_id = message.from_user.id
     reports = get_user_reports(user_id)
     
     if not reports:
-        await callback.answer("У вас пока нет обращений", show_alert=True)
+        await message.answer(
+            "У вас пока нет обращений",
+            reply_markup=get_main_menu()
+        )
         return
     
     # Format reports list
@@ -187,52 +253,26 @@ async def my_reports(callback: CallbackQuery):
         
         reports_text += "\n"
     
-    await callback.message.edit_text(
+    await message.answer(
         reports_text,
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_main_menu()
     )
-    await callback.answer()
 
-@router.callback_query(F.data == "view_report_")
-async def view_report_details(callback: CallbackQuery):
-    """View detailed report information"""
-    report_id = int(callback.data.split("_")[2])
-    report = get_report(report_id)
+@router.message()
+async def fallback_handler(message: Message, state: FSMContext):
+    """Fallback handler for unknown messages"""
+    current_state = await state.get_state()
     
-    if not report:
-        await callback.answer("❌ Обращение не найдено", show_alert=True)
-        return
-    
-    # Check if user owns this report
-    if report['user_id'] != callback.from_user.id:
-        await callback.answer("❌ Это не ваше обращение", show_alert=True)
-        return
-    
-    status_text = {
-        'pending': '⏳ Ожидает обработки',
-        'in_progress': '🔄 В работе',
-        'completed': '✅ Выполнено'
-    }.get(report['status'], '❓ Неизвестно')
-    
-    details = (
-        f"📋 Обращение #{report['id']}\n\n"
-        f"📌 Тип: {report['report_type']}\n"
-        f"📊 Статус: {status_text}\n"
-        f"⏰ Создано: {report['created_at'].strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"💬 Ваше сообщение:\n{report['report_text']}\n"
-    )
-    
-    if report['responsible_user_name']:
-        details += f"\n👤 Ответственный: {report['responsible_user_name']}\n"
-    
-    if report['taken_at']:
-        details += f"🕐 Взято в работу: {report['taken_at'].strftime('%d.%m.%Y %H:%M')}\n"
-    
-    if report['admin_response']:
-        details += f"\n🔧 Ответ:\n{report['admin_response']}\n"
-    
-    if report['completed_at']:
-        details += f"\n✅ Завершено: {report['completed_at'].strftime('%d.%m.%Y %H:%M')}"
-    
-    await callback.message.edit_text(details, reply_markup=get_cancel_keyboard())
-    await callback.answer()
+    # Если пользователь в процессе создания обращения
+    if current_state:
+        await message.answer(
+            "❌ Пожалуйста, следуйте инструкциям выше или нажмите '❌ Отменить' для возврата в главное меню.",
+            reply_markup=get_cancel_keyboard()
+        )
+    else:
+        # Если пользователь просто отправил неизвестное сообщение
+        await message.answer(
+            "❓ Я не понимаю эту команду.\n\n"
+            "Используйте кнопки меню или команду /start для начала работы.",
+            reply_markup=get_main_menu()
+        )
