@@ -26,3 +26,4 @@ if not ADMIN_GROUP_ID:
     raise ValueError("ADMIN_GROUP_ID is required! Please set it in .env file")
 if not DB_PASSWORD:
     raise ValueError("DB_PASSWORD is required! Please set it in .env file")
+
