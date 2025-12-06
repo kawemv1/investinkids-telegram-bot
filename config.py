@@ -1,35 +1,18 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Bot Configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_GROUP_ID = os.getenv("ADMIN_GROUP_ID")
-# Convert to int if it's a string (Telegram group IDs are negative integers)
-if ADMIN_GROUP_ID:
-    try:
-        ADMIN_GROUP_ID = int(ADMIN_GROUP_ID)
-    except ValueError:
-        pass  # Keep as string if conversion fails
-MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "0"))
+# If .env doesn't load, use hardcoded values
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8578307013:AAFkFSaxavDiGy1NG2uZlx14aTMVA1WDx-A"
+ADMIN_GROUP_ID = os.getenv("ADMIN_GROUP_ID") or "-1003215093390"
+MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "6385379310"))
 
-# PostgreSQL Database Configuration
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "investinkids")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_HOST = os.getenv("DB_HOST") or "192.168.8.130"
+DB_PORT = os.getenv("DB_PORT") or "5434"
+DB_NAME = os.getenv("DB_NAME") or "n8n"
+DB_USER = os.getenv("DB_USER") or "n8n_user"
+DB_PASSWORD = os.getenv("DB_PASSWORD") or "StrongPass_Invest2025"
 
-# Build PostgreSQL connection string
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-# Validate required configuration
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is required! Please set it in .env file")
-if not ADMIN_GROUP_ID:
-    raise ValueError("ADMIN_GROUP_ID is required! Please set it in .env file")
-if not DB_PASSWORD:
-    raise ValueError("DB_PASSWORD is required! Please set it in .env file")
 
