@@ -1,5 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Message
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -11,48 +11,45 @@ router = Router()
 class AdminStates(StatesGroup):
     waiting_for_response = State()
 
-@router.callback_query(F.data.startswith("take_request_"))
-async def take_request(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text.startswith("/take_"))
+async def take_request(message: Message, state: FSMContext):
     """Admin takes responsibility for report"""
-    report_id = int(callback.data.split("_")[2])
-    
-    # Get report details
-    report = get_report(report_id)
-    
-    if not report:
-        await callback.answer("❌ Обращение не найдено", show_alert=True)
-        return
-    
-    if report['status'] != 'pending':
-        await callback.answer(
-            f"⚠️ Обращение уже взято в работу: {report['responsible_user_name']}",
-            show_alert=True
+    try:
+        report_id = int(message.text.split("_")[1])
+        
+        # Get report details
+        report = get_report(report_id)
+        
+        if not report:
+            await message.answer("❌ Обращение не найдено")
+            return
+        
+        if report['status'] != 'pending':
+            await message.answer(
+                f"⚠️ Обращение уже взято в работу: {report['responsible_user_name']}"
+            )
+            return
+        
+        # Assign admin to report
+        take_report(
+            report_id=report_id,
+            worker_id=message.from_user.id,
+            worker_name=message.from_user.full_name
         )
-        return
-    
-    # Assign admin to report
-    take_report(
-        report_id=report_id,
-        worker_id=callback.from_user.id,
-        worker_name=callback.from_user.full_name
-    )
-    
-    # Update message in group
-    await callback.message.edit_text(
-        callback.message.text + f"\n\n✅ Взял(а) в работу: {callback.from_user.full_name}\n"
-        f"🕐 Время: {callback.message.date.strftime('%d.%m.%Y %H:%M')}",
-        reply_markup=None
-    )
-    
-    # Send to admin in PM
-    await callback.bot.send_message(
-        chat_id=callback.from_user.id,
-        text=(
+        
+        # Send to admin in PM
+        admin_text = (
             f"✅ Вы взяли обращение #{report_id} в работу\n\n"
             f"👤 От: {report['user_name']}\n"
             f"🆔 User ID: {report['user_id']}\n"
             f"📌 Тип: {report['report_type']}\n"
             f"💬 Сообщение:\n{report['report_text']}\n\n"
+        )
+        
+        if report.get('photo_file_id'):
+            admin_text += "📷 Фото прикреплено\n\n"
+        
+        admin_text += (
             f"📊 Статус: В работе\n"
             f"⏰ Создано: {report['created_at'].strftime('%d.%m.%Y %H:%M')}\n\n"
             f"Когда выполните работу, отправьте ответ:\n"
@@ -60,9 +57,23 @@ async def take_request(callback: CallbackQuery, state: FSMContext):
             f"Пример:\n"
             f"/complete_{report_id} Проблема решена, заменили оборудование"
         )
-    )
-    
-    await callback.answer("✅ Обращение назначено вам")
+        
+        if report.get('photo_file_id'):
+            await message.bot.send_photo(
+                chat_id=message.from_user.id,
+                photo=report['photo_file_id'],
+                caption=admin_text
+            )
+        else:
+            await message.bot.send_message(
+                chat_id=message.from_user.id,
+                text=admin_text
+            )
+        
+        await message.answer("✅ Обращение назначено вам")
+        
+    except (IndexError, ValueError):
+        await message.answer("❌ Используйте: /take_[ID]")
 
 @router.message(F.text.startswith("/complete_"))
 async def complete_command(message: Message, state: FSMContext):
@@ -119,18 +130,27 @@ async def complete_command(message: Message, state: FSMContext):
         )
         
         # Notify user
-        await message.bot.send_message(
-            chat_id=report['user_id'],
-            text=(
-                f"✅ Ваше обращение #{report_id} выполнено!\n\n"
-                f"📌 Тип: {report['report_type']}\n"
-                f"⏰ Создано: {report['created_at'].strftime('%d.%m.%Y %H:%M')}\n"
-                f"✓ Завершено: Сейчас\n\n"
-                f"💬 Ваше сообщение:\n{report['report_text']}\n\n"
-                f"🔧 Ответ ({report['responsible_user_name']}):\n{admin_response}\n\n"
-                "Спасибо за обращение! 🙏"
-            )
+        user_text = (
+            f"✅ Ваше обращение #{report_id} выполнено!\n\n"
+            f"📌 Тип: {report['report_type']}\n"
+            f"⏰ Создано: {report['created_at'].strftime('%d.%m.%Y %H:%M')}\n"
+            f"✓ Завершено: Сейчас\n\n"
+            f"💬 Ваше сообщение:\n{report['report_text']}\n\n"
+            f"🔧 Ответ ({report['responsible_user_name']}):\n{admin_response}\n\n"
+            "Спасибо за обращение! 🙏"
         )
+        
+        if report.get('photo_file_id'):
+            await message.bot.send_photo(
+                chat_id=report['user_id'],
+                photo=report['photo_file_id'],
+                caption=user_text
+            )
+        else:
+            await message.bot.send_message(
+                chat_id=report['user_id'],
+                text=user_text
+            )
         
     except (IndexError, ValueError) as e:
         await message.answer(
@@ -235,6 +255,9 @@ async def view_report(message: Message):
             f"💬 Сообщение:\n{report['report_text']}\n"
         )
         
+        if report.get('photo_file_id'):
+            details += "\n📷 Фото прикреплено\n"
+        
         if report['responsible_user_name']:
             details += f"\n👨‍💼 Ответственный: {report['responsible_user_name']}\n"
             details += f"🆔 ID: {report['responsible_user_id']}\n"
@@ -248,7 +271,13 @@ async def view_report(message: Message):
         if report['completed_at']:
             details += f"\n✅ Завершено: {report['completed_at'].strftime('%d.%m.%Y %H:%M')}"
         
-        await message.answer(details)
+        if report.get('photo_file_id'):
+            await message.answer_photo(
+                photo=report['photo_file_id'],
+                caption=details
+            )
+        else:
+            await message.answer(details)
         
     except (IndexError, ValueError):
         await message.answer("❌ Используйте: /report_[ID]")
@@ -262,8 +291,8 @@ async def admin_help(message: Message):
         "/inprogress - Показать обращения в работе\n"
         "/completed - Показать завершенные\n"
         "/report_[ID] - Детали обращения\n"
+        "/take_[ID] - Взять обращение в работу\n"
         "/complete_[ID] [ответ] - Завершить обращение\n"
-        "/adminhelp - Эта справка\n\n"
-        "💡 Взять обращение в работу можно кнопкой в группе"
+        "/adminhelp - Эта справка"
     )
     await message.answer(help_text)
